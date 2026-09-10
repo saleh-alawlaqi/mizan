@@ -1,0 +1,40 @@
+name: my_app
+description: "A new Flutter project."
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # حزم قاعدة البيانات والربط
+  supabase_flutter: ^2.5.4
+  fl_chart: ^0.68.0
+
+  # حزم طباعة وإنشاء ملفات الـ PDF
+  pdf: ^3.10.4
+  printing: ^5.11.1
+
+  # حزم العمليات الحسابية الدقيقة
+  decimal: ^2.3.3
+  rational: ^2.2.2
+
+  # أيقونات المواد الإضافية (إن وجدت)
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  # تعريف مجلدات الأصول والصور
+  assets:
+    - assets/images/
+    - assets/icons/
