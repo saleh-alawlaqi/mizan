@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
+import '../utils/pdf_helper.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({super.key});
@@ -197,9 +199,48 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     );
   }
 
+  Future<void> _exportPdf() async {
+    await PdfHelper.buildAndPrint(
+      title: 'تقرير المشاريع والمستخلصات',
+      fileName: 'تقرير_المشاريع.pdf',
+      content: (font, fontBold) => [
+        PdfHelper.table(
+          font: font,
+          fontBold: fontBold,
+          headers: ['المشروع', 'الموقع', 'قيمة العقد', 'المستلم', 'المتبقي'],
+          rows: projectsList.map((item) {
+            final contractValue = (item['contract_value'] as num?)?.toDouble();
+            final received = _receivedByProject[item['id'].toString()] ?? 0;
+            final remaining =
+                contractValue != null ? contractValue - received : null;
+            return [
+              item['name']?.toString() ?? '',
+              item['location']?.toString() ?? '',
+              contractValue != null
+                  ? '${contractValue.toStringAsFixed(0)} ر.س'
+                  : '-',
+              '${received.toStringAsFixed(0)} ر.س',
+              remaining != null ? '${remaining.toStringAsFixed(0)} ر.س' : '-',
+            ];
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('المشاريع'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf, color: AppTheme.primary),
+            tooltip: 'تصدير PDF',
+            onPressed: isLoading ? null : _exportPdf,
+          ),
+        ],
+      ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : projectsList.isEmpty

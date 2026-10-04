@@ -212,6 +212,25 @@ class _AddOperationSheetState extends State<_AddOperationSheet> {
 
       await supabase.from('operations').insert(op.toJson());
 
+      // خصم تلقائي من محفظة المالك لأي مصاريف تخصه من هذي العملية
+      final walletAmount = op.totalExpenses +
+          (_handling == SharedExpenseHandling.fullyIgnored
+              ? 0
+              : op.sharedExpense);
+      if (walletAmount > 0) {
+        try {
+          await supabase.from('wallet_transactions').insert({
+            'type': 'expense',
+            'amount': walletAmount,
+            'description':
+                'مصاريف عملية: ${_selectedEquipment!['name'] ?? ''} - ${_selectedDriver!['name'] ?? ''}',
+            'date': DateTime.now().toIso8601String().substring(0, 10),
+          });
+        } catch (_) {
+          // لا نوقف حفظ العملية لو فشل خصم المحفظة لأي سبب
+        }
+      }
+
       if (mounted) {
         Navigator.pop(context);
         widget.onSaved();

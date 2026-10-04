@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
-// استيراد الشاشات الأساسية
+import 'theme/app_theme.dart';
+import 'screens/subscription_gate.dart';
+import 'screens/admin_panel_screen.dart';
+
+// الشاشات الأساسية
 import 'screens/dashboard_screen.dart';
 import 'screens/equipment_screen.dart';
 import 'screens/drivers_screen.dart';
@@ -14,14 +15,13 @@ import 'screens/projects_screen.dart';
 import 'screens/operations_screen.dart';
 import 'screens/reports_screen.dart';
 
-// استيراد الشاشات الإضافية
+// شاشات إضافية
 import 'screens/settings_screen.dart';
 import 'screens/account_statement_screen.dart';
-import 'screens/add_user_screen.dart';
-import 'screens/add_driver_screen.dart';
-import 'screens/add_equipment_screen.dart';
-
-// شاشة الدخول الجديدة
+import 'screens/users_screen.dart';
+import 'screens/team_screen.dart';
+import 'screens/wallet_screen.dart';
+import 'screens/salary_screen.dart';
 import 'screens/login_screen.dart';
 
 Future<void> main() async {
@@ -51,24 +51,52 @@ class MizanApp extends StatelessWidget {
           child: child!,
         );
       },
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F4C81),
-          primary: const Color(0xFF0F4C81),
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF8F9FA),
-      ),
+      theme: AppTheme.themeData(),
       home: const AuthGate(),
     );
   }
 }
 
-/// بوابة الدخول: تعرض شاشة تسجيل الدخول لو ما فيه جلسة نشطة،
-/// أو الشاشة الرئيسية مباشرة لو المستخدم مسجّل دخوله فعلاً.
-/// تستمع تلقائياً لأي تغيير بحالة الدخول (دخول/خروج) وتحدّث الواجهة فوراً.
-class AuthGate extends StatelessWidget {
+/// بوابة الدخول: تسجيل الدخول -> التحقق من الاشتراك -> الشاشة الرئيسية
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  String? _lastCheckedUserId;
+  SubscriptionStatus? _subscriptionStatus;
+  bool _isCheckingSubscription = false;
+
+  Future<void> _claimInvitesIfNeeded(String userId) async {
+    try {
+      final email = supabase.auth.currentUser?.email;
+      if (email == null) return;
+      final pending = await supabase
+          .from('team_members')
+          .select()
+          .eq('invited_email', email)
+          .isFilter('member_user_id', null);
+      for (final invite in pending) {
+        await supabase
+            .from('team_members')
+            .update({'member_user_id': userId, 'status': 'active'}).eq(
+                'id', invite['id']);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _runChecks(String userId) async {
+    if (_isCheckingSubscription) return;
+    _isCheckingSubscription = true;
+    await _claimInvitesIfNeeded(userId);
+    final status = await SubscriptionService.checkAndEnsureSubscription();
+    _lastCheckedUserId = userId;
+    _isCheckingSubscription = false;
+    if (mounted) setState(() => _subscriptionStatus = status);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,10 +104,30 @@ class AuthGate extends StatelessWidget {
       stream: supabase.auth.onAuthStateChange,
       builder: (context, snapshot) {
         final session = supabase.auth.currentSession;
-        if (session != null) {
+
+        if (session == null) {
+          _lastCheckedUserId = null;
+          _subscriptionStatus = null;
+          return const LoginScreen();
+        }
+
+        if (_lastCheckedUserId != session.user.id) {
+          // مستخدم جديد أو أول تحميل - شغّل الفحص
+          Future.microtask(() => _runChecks(session.user.id));
+          return const Scaffold(
+              body: Center(child: CircularProgressIndicator()));
+        }
+
+        if (_subscriptionStatus == null) {
+          return const Scaffold(
+              body: Center(child: CircularProgressIndicator()));
+        }
+
+        if (_subscriptionStatus == SubscriptionStatus.active) {
           return const MainLayout();
         }
-        return const LoginScreen();
+
+        return SubscriptionBlockedScreen(status: _subscriptionStatus!);
       },
     );
   }
@@ -94,6 +142,15 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   int _currentIndex = 0;
+  bool _isAdmin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    AdminService.isCurrentUserAdmin().then((val) {
+      if (mounted) setState(() => _isAdmin = val);
+    });
+  }
 
   final List<Widget> _screens = [
     const DashboardScreen(),
@@ -114,9 +171,8 @@ class _MainLayoutState extends State<MainLayout> {
         content: const Text('هل أنت متأكد من تسجيل الخروج؟'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
-          ),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('إلغاء')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child:
@@ -125,11 +181,14 @@ class _MainLayoutState extends State<MainLayout> {
         ],
       ),
     );
-
     if (confirm == true) {
       await supabase.auth.signOut();
-      // AuthGate بيتحول تلقائياً لشاشة الدخول عبر الستريم
     }
+  }
+
+  void _go(Widget screen) {
+    Navigator.pop(context);
+    Navigator.push(context, MaterialPageRoute(builder: (context) => screen));
   }
 
   @override
@@ -141,49 +200,30 @@ class _MainLayoutState extends State<MainLayout> {
         title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.balance, color: Color(0xFF0F4C81)),
+            Icon(Icons.balance, color: AppTheme.primary),
             SizedBox(width: 8),
-            Text(
-              'ميزان',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF0F4C81),
-              ),
-            ),
+            Text('ميزان',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, color: AppTheme.primary)),
           ],
         ),
         centerTitle: false,
-        backgroundColor: Colors.white,
-        elevation: 1,
-        iconTheme: const IconThemeData(color: Color(0xFF0F4C81)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.picture_as_pdf, color: Color(0xFF0F4C81)),
-            tooltip: 'تصدير تقرير لوحة التحكم PDF',
-            onPressed: () => _generateAndPrintPdf(context),
-          ),
-        ],
       ),
       drawer: Drawer(
         child: Column(
           children: [
             UserAccountsDrawerHeader(
-              decoration: const BoxDecoration(color: Color(0xFF0F4C81)),
+              decoration: const BoxDecoration(color: AppTheme.primary),
               currentAccountPicture: const CircleAvatar(
                 backgroundColor: Colors.white,
-                child: Text(
-                  'م',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF0F4C81),
-                  ),
-                ),
+                child: Text('م',
+                    style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primary)),
               ),
-              accountName: const Text(
-                'مدير النظام',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              accountName: const Text('مدير النظام',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
               accountEmail: Text(userEmail),
             ),
             Expanded(
@@ -201,70 +241,54 @@ class _MainLayoutState extends State<MainLayout> {
                   _drawerItem(7, 'التقارير', Icons.bar_chart),
                   const Divider(),
                   ListTile(
+                    leading: const Icon(Icons.account_balance_wallet_outlined,
+                        color: AppTheme.primary),
+                    title: const Text('محفظة المالك'),
+                    onTap: () => _go(const WalletScreen()),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.payments_outlined,
+                        color: AppTheme.primary),
+                    title: const Text('رواتب السائقين'),
+                    onTap: () => _go(const SalaryScreen()),
+                  ),
+                  ListTile(
                     leading: const Icon(Icons.account_balance_wallet,
-                        color: Color(0xFF0F4C81)),
-                    title: const Text('كشف حساب الملاك والموردين'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) =>
-                                const AccountStatementScreen()),
-                      );
-                    },
+                        color: AppTheme.primary),
+                    title: const Text('كشف حساب الملاك والسائقين'),
+                    onTap: () => _go(const AccountStatementScreen()),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.people_alt_outlined,
+                        color: AppTheme.primary),
+                    title: const Text('المستخدمون'),
+                    onTap: () => _go(const UsersScreen()),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.admin_panel_settings_outlined,
+                        color: AppTheme.primary),
+                    title: const Text('صلاحيات الفريق'),
+                    onTap: () => _go(const TeamScreen()),
                   ),
                   ListTile(
                     leading:
-                        const Icon(Icons.person_add, color: Color(0xFF0F4C81)),
-                    title: const Text('إضافة مستخدم جديد'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const AddUserScreen()),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.badge, color: Color(0xFF0F4C81)),
-                    title: const Text('إضافة سائق (سريع)'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const AddDriverScreen()),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.local_shipping,
-                        color: Color(0xFF0F4C81)),
-                    title: const Text('إضافة معدة بالنوع والموديل'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const AddEquipmentScreen()),
-                      );
-                    },
-                  ),
-                  ListTile(
-                    leading:
-                        const Icon(Icons.settings, color: Color(0xFF0F4C81)),
+                        const Icon(Icons.settings, color: AppTheme.primary),
                     title: const Text('الإعدادات'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const SettingsScreen()),
-                      );
-                    },
+                    onTap: () => _go(const SettingsScreen()),
                   ),
+                  if (_isAdmin) ...[
+                    const Divider(),
+                    ListTile(
+                      leading: const Icon(Icons.shield_outlined,
+                          color: Colors.deepPurple),
+                      title: const Text('لوحة إدارة الاشتراكات',
+                          style: TextStyle(
+                              color: Colors.deepPurple,
+                              fontWeight: FontWeight.bold)),
+                      onTap: () => _go(const AdminPanelScreen()),
+                    ),
+                  ],
                   const Divider(),
                   ListTile(
                     leading: const Icon(Icons.logout, color: Colors.red),
@@ -291,125 +315,26 @@ class _MainLayoutState extends State<MainLayout> {
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: isSelected
-            ? const Color(0xFF0F4C81).withValues(alpha: 0.1)
+            ? AppTheme.primary.withValues(alpha: 0.1)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
       ),
       child: ListTile(
-        leading: Icon(icon,
-            color: isSelected ? const Color(0xFF0F4C81) : Colors.grey[700]),
+        leading:
+            Icon(icon, color: isSelected ? AppTheme.primary : Colors.grey[700]),
         title: Text(
           title,
           style: TextStyle(
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: isSelected ? const Color(0xFF0F4C81) : Colors.black87,
+            color: isSelected ? AppTheme.primary : Colors.black87,
           ),
         ),
         selected: isSelected,
         onTap: () {
-          setState(() {
-            _currentIndex = index;
-          });
+          setState(() => _currentIndex = index);
           Navigator.pop(context);
         },
       ),
-    );
-  }
-
-  Future<void> _generateAndPrintPdf(BuildContext context) async {
-    final pdf = pw.Document();
-
-    double totalRev = 0;
-    double totalOwner = 0;
-    double totalDriver = 0;
-    try {
-      final ops = await supabase.from('operations').select();
-      for (var op in ops) {
-        totalRev += (op['revenue'] ?? 0) as num;
-        totalOwner += (op['owner_net'] ?? 0) as num;
-        totalDriver += (op['driver_net'] ?? 0) as num;
-      }
-    } catch (_) {}
-
-    final font = await PdfGoogleFonts.cairoRegular();
-    final fontBold = await PdfGoogleFonts.cairoBold();
-
-    pdf.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a4,
-        build: (pw.Context context) {
-          return pw.Directionality(
-            textDirection: pw.TextDirection.rtl,
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('تطبيق ميزان - تقرير لوحة التحكم',
-                        style: pw.TextStyle(
-                            font: fontBold,
-                            fontSize: 20,
-                            color: PdfColors.blue900)),
-                    pw.Text(
-                        'التاريخ: ${DateTime.now().toString().substring(0, 10)}',
-                        style: pw.TextStyle(font: font, fontSize: 12)),
-                  ],
-                ),
-                pw.SizedBox(height: 20),
-                pw.Divider(),
-                pw.SizedBox(height: 20),
-                pw.Text('الملخص المالي العام:',
-                    style: pw.TextStyle(font: fontBold, fontSize: 16)),
-                pw.SizedBox(height: 10),
-                pw.Row(
-                  children: [
-                    pw.Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const pw.BoxDecoration(
-                            color: PdfColors.black, shape: pw.BoxShape.circle)),
-                    pw.SizedBox(width: 8),
-                    pw.Text('إجمالي الإيرادات المسجلة: $totalRev ر.س',
-                        style: pw.TextStyle(font: font, fontSize: 14)),
-                  ],
-                ),
-                pw.SizedBox(height: 6),
-                pw.Row(
-                  children: [
-                    pw.Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const pw.BoxDecoration(
-                            color: PdfColors.black, shape: pw.BoxShape.circle)),
-                    pw.SizedBox(width: 8),
-                    pw.Text('إجمالي مستحقات الملاك: $totalOwner ر.س',
-                        style: pw.TextStyle(font: font, fontSize: 14)),
-                  ],
-                ),
-                pw.SizedBox(height: 6),
-                pw.Row(
-                  children: [
-                    pw.Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const pw.BoxDecoration(
-                            color: PdfColors.black, shape: pw.BoxShape.circle)),
-                    pw.SizedBox(width: 8),
-                    pw.Text('إجمالي مستحقات السائقين: $totalDriver ر.س',
-                        style: pw.TextStyle(font: font, fontSize: 14)),
-                  ],
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-
-    await Printing.layoutPdf(
-      onLayout: (format) async => pdf.save(),
-      name: 'تقرير_ميزان_المالي.pdf',
     );
   }
 }

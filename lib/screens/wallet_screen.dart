@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
+import '../utils/pdf_helper.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
@@ -135,10 +137,64 @@ class _WalletScreenState extends State<WalletScreen> {
     );
   }
 
+  Future<void> _exportPdf() async {
+    double totalDeposits = 0, totalExpenses = 0;
+    for (final t in _transactions) {
+      final amt = (t['amount'] as num?)?.toDouble() ?? 0;
+      if (t['type'] == 'deposit') {
+        totalDeposits += amt;
+      } else {
+        totalExpenses += amt;
+      }
+    }
+
+    await PdfHelper.buildAndPrint(
+      title: 'كشف محفظة المالك',
+      fileName: 'كشف_محفظة_المالك.pdf',
+      content: (font, fontBold) => [
+        pw.Row(
+          children: [
+            PdfHelper.summaryCard(font, fontBold, 'الرصيد الحالي',
+                '${_balance.toStringAsFixed(0)} ر.س'),
+            pw.SizedBox(width: 10),
+            PdfHelper.summaryCard(font, fontBold, 'إجمالي الإيداعات',
+                '${totalDeposits.toStringAsFixed(0)} ر.س'),
+            pw.SizedBox(width: 10),
+            PdfHelper.summaryCard(font, fontBold, 'إجمالي المصاريف',
+                '${totalExpenses.toStringAsFixed(0)} ر.س'),
+          ],
+        ),
+        pw.SizedBox(height: 16),
+        PdfHelper.table(
+          font: font,
+          fontBold: fontBold,
+          headers: ['التاريخ', 'النوع', 'المبلغ', 'الوصف'],
+          rows: _transactions
+              .map((t) => [
+                    t['date']?.toString() ?? '',
+                    t['type'] == 'deposit' ? 'إيداع' : 'مصروف',
+                    '${(t['amount'] as num).toStringAsFixed(0)} ر.س',
+                    t['description']?.toString() ?? '',
+                  ])
+              .toList(),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('محفظة المالك')),
+      appBar: AppBar(
+        title: const Text('محفظة المالك'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf, color: AppTheme.primary),
+            tooltip: 'تصدير PDF',
+            onPressed: _isLoading ? null : _exportPdf,
+          ),
+        ],
+      ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(

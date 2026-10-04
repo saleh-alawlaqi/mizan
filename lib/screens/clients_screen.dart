@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
+import '../utils/pdf_helper.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 class ClientsScreen extends StatefulWidget {
   const ClientsScreen({super.key});
@@ -43,7 +45,9 @@ class _ClientsScreenState extends State<ClientsScreen> {
         title: const Text('حذف العميل'),
         content: Text('هل أنت متأكد من حذف "${client['name']}"؟'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('إلغاء')),
           TextButton(
               onPressed: () => Navigator.pop(context, true),
               child: const Text('حذف', style: TextStyle(color: Colors.red))),
@@ -56,22 +60,26 @@ class _ClientsScreenState extends State<ClientsScreen> {
       fetchClients();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم حذف العميل'), backgroundColor: Colors.green),
+          const SnackBar(
+              content: Text('تم حذف العميل'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذّر الحذف: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('تعذّر الحذف: $e'), backgroundColor: Colors.red),
         );
       }
     }
   }
 
-  void _showClientModal(BuildContext context, {Map<String, dynamic>? existing}) {
+  void _showClientModal(BuildContext context,
+      {Map<String, dynamic>? existing}) {
     final isEdit = existing != null;
     final nameController = TextEditingController(text: existing?['name'] ?? '');
-    final phoneController = TextEditingController(text: existing?['phone'] ?? '');
+    final phoneController =
+        TextEditingController(text: existing?['phone'] ?? '');
 
     showModalBottomSheet(
       context: context,
@@ -92,17 +100,20 @@ class _ClientsScreenState extends State<ClientsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(isEdit ? 'تعديل بيانات العميل' : 'إضافة عميل جديد',
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
                   TextField(
                       controller: nameController,
                       decoration: const InputDecoration(
-                          labelText: 'اسم العميل / الشركة', border: OutlineInputBorder())),
+                          labelText: 'اسم العميل / الشركة',
+                          border: OutlineInputBorder())),
                   const SizedBox(height: 12),
                   TextField(
                       controller: phoneController,
                       decoration: const InputDecoration(
-                          labelText: 'رقم الجوال', border: OutlineInputBorder()),
+                          labelText: 'رقم الجوال',
+                          border: OutlineInputBorder()),
                       keyboardType: TextInputType.phone),
                   const SizedBox(height: 20),
                   ElevatedButton(
@@ -117,7 +128,10 @@ class _ClientsScreenState extends State<ClientsScreen> {
                                 'phone': phoneController.text.trim(),
                               };
                               if (isEdit) {
-                                await supabase.from('clients').update(data).eq('id', existing['id']);
+                                await supabase
+                                    .from('clients')
+                                    .update(data)
+                                    .eq('id', existing['id']);
                               } else {
                                 await supabase.from('clients').insert(data);
                               }
@@ -129,15 +143,19 @@ class _ClientsScreenState extends State<ClientsScreen> {
                               setModalState(() => isSaving = false);
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('خطأ: $e'), backgroundColor: Colors.red),
+                                  SnackBar(
+                                      content: Text('خطأ: $e'),
+                                      backgroundColor: Colors.red),
                                 );
                               }
                             }
                           },
                     child: isSaving
                         ? const SizedBox(
-                            height: 20, width: 20,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2))
                         : Text(isEdit ? 'حفظ التعديلات' : 'حفظ العميل'),
                   ),
                   const SizedBox(height: 20),
@@ -150,9 +168,39 @@ class _ClientsScreenState extends State<ClientsScreen> {
     );
   }
 
+  Future<void> _exportPdf() async {
+    await PdfHelper.buildAndPrint(
+      title: 'تقرير العملاء',
+      fileName: 'تقرير_العملاء.pdf',
+      content: (font, fontBold) => [
+        PdfHelper.table(
+          font: font,
+          fontBold: fontBold,
+          headers: ['الاسم', 'الجوال'],
+          rows: clientsList
+              .map((item) => [
+                    item['name']?.toString() ?? '',
+                    item['phone']?.toString() ?? '-',
+                  ])
+              .toList(),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('العملاء'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf, color: AppTheme.primary),
+            tooltip: 'تصدير PDF',
+            onPressed: isLoading ? null : _exportPdf,
+          ),
+        ],
+      ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : clientsList.isEmpty
@@ -166,17 +214,58 @@ class _ClientsScreenState extends State<ClientsScreen> {
                     itemCount: clientsList.length,
                     itemBuilder: (context, index) {
                       final item = clientsList[index];
-                      return Card(
+                      return Container(
                         margin: const EdgeInsets.only(bottom: 12),
-                        child: ListTile(
-                          leading: const Icon(Icons.people_outline, color: AppTheme.primary),
-                          title: Text(item['name'] ?? 'بدون اسم',
-                              style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text('الجوال: ${item['phone'] ?? 'غير متوفر'}'),
-                          onTap: () => _showClientModal(context, existing: item),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.red),
-                            onPressed: () => _deleteClient(item),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppTheme.border),
+                          boxShadow: AppTheme.softShadow,
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: () =>
+                              _showClientModal(context, existing: item),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 46,
+                                  height: 46,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryLight,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(Icons.people_outline,
+                                      color: AppTheme.primary),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(item['name'] ?? 'بدون اسم',
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 14)),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                          'الجوال: ${item['phone'] ?? 'غير متوفر'}',
+                                          style: const TextStyle(
+                                              fontSize: 12,
+                                              color: AppTheme.textMuted)),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline,
+                                      color: AppTheme.destructive, size: 20),
+                                  onPressed: () => _deleteClient(item),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       );

@@ -9,6 +9,9 @@ enum SharedExpenseHandling {
   /// يُخصم من السائق كمصروف تشغيلي عادي - لا يرجع للمالك (لأنه صُرف فعلاً)
   operatingExpense,
 
+  /// مصروف مدفوع ولا يُخصم لا من السائق ولا من المالك (مخصوم على الجهة أو لا يؤثر)
+  fullyIgnored,
+
   /// العملية ملغاة بالكامل - لا يوجد توزيع
   cancelled,
 
@@ -111,7 +114,10 @@ class AccountingService {
 
     // ==================== عقد راتب ثابت ====================
     if (isFixedSalary) {
-      final ownerNet = revenue - totalOwnerExpenses - sharedExpense;
+      final ownerNet =
+          (input.sharedExpenseHandling == SharedExpenseHandling.fullyIgnored)
+              ? (revenue - totalOwnerExpenses)
+              : (revenue - totalOwnerExpenses - sharedExpense);
 
       steps.add(CalculationStep(
         label: 'حصة المالك',
@@ -125,11 +131,19 @@ class AccountingService {
           description: 'تُخصم من المالك فقط',
         ));
       }
-      if (sharedExpense > Decimal.zero) {
+      if (sharedExpense > Decimal.zero &&
+          input.sharedExpenseHandling != SharedExpenseHandling.fullyIgnored) {
         steps.add(CalculationStep(
           label: 'المصاريف المشتركة',
           value: -sharedExpense,
           description: 'تُخصم بالكامل من المالك فقط',
+        ));
+      } else if (sharedExpense > Decimal.zero &&
+          input.sharedExpenseHandling == SharedExpenseHandling.fullyIgnored) {
+        steps.add(CalculationStep(
+          label: 'المصاريف المشتركة (لا تُخصم)',
+          value: Decimal.zero,
+          description: 'مصروف مسجل ولا يؤثر على الصافي',
         ));
       }
       steps.add(CalculationStep(
@@ -150,7 +164,10 @@ class AccountingService {
         driverShare: Decimal.zero,
         sharedExpense: sharedExpense,
         driverSharedPortion: Decimal.zero,
-        ownerSharedPortion: sharedExpense,
+        ownerSharedPortion:
+            input.sharedExpenseHandling == SharedExpenseHandling.fullyIgnored
+                ? Decimal.zero
+                : sharedExpense,
         driverNet: Decimal.zero,
         ownerNet: ownerNet,
         steps: steps,
@@ -207,12 +224,14 @@ class AccountingService {
         ownerShare = _d(double.tryParse(oShareVal.toStringAsFixed(4)) ?? 0.0);
         driverShare = _d(double.tryParse(dShareVal.toStringAsFixed(4)) ?? 0.0);
 
-        final dPortionVal = (sharedDouble * dRatioDouble) / totalRatioDouble;
-        final oPortionVal = (sharedDouble * oRatioDouble) / totalRatioDouble;
-        driverSharedPortion =
-            _d(double.tryParse(dPortionVal.toStringAsFixed(4)) ?? 0.0);
-        ownerSharedPortion =
-            _d(double.tryParse(oPortionVal.toStringAsFixed(4)) ?? 0.0);
+        if (input.sharedExpenseHandling != SharedExpenseHandling.fullyIgnored) {
+          final dPortionVal = (sharedDouble * dRatioDouble) / totalRatioDouble;
+          final oPortionVal = (sharedDouble * oRatioDouble) / totalRatioDouble;
+          driverSharedPortion =
+              _d(double.tryParse(dPortionVal.toStringAsFixed(4)) ?? 0.0);
+          ownerSharedPortion =
+              _d(double.tryParse(oPortionVal.toStringAsFixed(4)) ?? 0.0);
+        }
       }
     }
 
@@ -227,7 +246,19 @@ class AccountingService {
     steps.add(CalculationStep(label: 'حصة المالك', value: ownerShare));
     steps.add(CalculationStep(label: 'حصة السائق', value: driverShare));
 
-    if (input.sharedExpenseHandling == SharedExpenseHandling.addToOwner) {
+    if (input.sharedExpenseHandling == SharedExpenseHandling.fullyIgnored) {
+      driverNet = driverShare;
+      ownerNet = ownerShare - totalOwnerExpenses;
+
+      if (sharedExpense > Decimal.zero) {
+        steps.add(CalculationStep(
+          label: 'المصاريف المشتركة (لا تُخصم من أحد)',
+          value: Decimal.zero,
+          description: 'مصروف مدفوع ولا يؤثر على الصافي',
+        ));
+      }
+    } else if (input.sharedExpenseHandling ==
+        SharedExpenseHandling.addToOwner) {
       driverNet = driverShare - driverSharedPortion;
       ownerNet = ownerShare + driverSharedPortion - totalOwnerExpenses;
 
@@ -299,7 +330,6 @@ class AccountingService {
     return double.tryParse(value.toStringAsFixed(2)) ?? 0.0;
   }
 
-  /// نسبة التحصيل والمبلغ المتبقي لمشروع (يُستخدم مع مستخلصات المشاريع)
   static ({double remaining, double collectionRate}) calculateCollectionStatus(
     double received,
     double? expected,

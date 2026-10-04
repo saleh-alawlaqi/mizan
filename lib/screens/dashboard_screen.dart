@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../theme/app_theme.dart';
+import '../utils/pdf_helper.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,9 +27,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Map<String, dynamic>> _collectionProjects = [];
   List<Map<String, dynamic>> _maintenanceEquipment = [];
 
-  List<FlSpot> _weeklyChartSpots = [];
+  List<FlSpot> _weeklySpots = [];
+  List<String> _weekDayLabels = [];
   double _maxChartY = 1000;
-  List<String> _weekDaysLabels = [];
 
   @override
   void initState() {
@@ -45,7 +47,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .from('operations')
           .select()
           .order('created_at', ascending: false)
-          .limit(100);
+          .limit(200);
 
       final equipment = await supabase.from('equipment').select();
       final projects = await supabase.from('projects').select();
@@ -60,30 +62,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       }
 
-      Map<String, double> weeklyMap = {};
-      List<String> daysKeys = [];
+      // بيانات آخر 7 أيام للرسم البياني
+      final dayKeys = <String>[];
+      final dayLabels = <String>[];
       for (int i = 6; i >= 0; i--) {
         final d = today.subtract(Duration(days: i));
-        final key = d.toIso8601String().substring(0, 10);
-        daysKeys.add(key);
-        _weekDaysLabels.add(_getDayName(d.weekday));
-        weeklyMap[key] = 0.0;
+        dayKeys.add(d.toIso8601String().substring(0, 10));
+        dayLabels.add(_weekdayShort(d.weekday));
       }
-
+      final revByDay = {for (final k in dayKeys) k: 0.0};
       for (final op in ops) {
-        final opDate = op['date']?.toString();
-        if (opDate != null && weeklyMap.containsKey(opDate)) {
-          weeklyMap[opDate] =
-              (weeklyMap[opDate]! + ((op['revenue'] ?? 0) as num).toDouble());
+        final d = op['date']?.toString();
+        if (d != null && revByDay.containsKey(d)) {
+          revByDay[d] = revByDay[d]! + ((op['revenue'] ?? 0) as num).toDouble();
         }
       }
-
-      List<FlSpot> spots = [];
-      double maxVal = 1000;
-      for (int i = 0; i < daysKeys.length; i++) {
-        double val = weeklyMap[daysKeys[i]] ?? 0;
-        spots.add(FlSpot(i.toDouble(), val));
-        if (val > maxVal) maxVal = val;
+      final spots = <FlSpot>[];
+      double maxVal = 500;
+      for (int i = 0; i < dayKeys.length; i++) {
+        final v = revByDay[dayKeys[i]] ?? 0;
+        spots.add(FlSpot(i.toDouble(), v));
+        if (v > maxVal) maxVal = v;
       }
 
       final collectionProjects = (projects as List).where((p) {
@@ -112,8 +111,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               List<Map<String, dynamic>>.from(collectionProjects);
           _maintenanceEquipment =
               List<Map<String, dynamic>>.from(maintenanceEquipment);
-          _weeklyChartSpots = spots;
-          _maxChartY = maxVal * 1.2;
+          _weeklySpots = spots;
+          _weekDayLabels = dayLabels;
+          _maxChartY = maxVal * 1.25;
           _isLoading = false;
         });
       }
@@ -122,595 +122,440 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  String _getDayName(int weekday) {
-    const days = [
-      'الإثنين',
-      'الثلاثاء',
-      'الأربعاء',
-      'الخميس',
-      'الجمعة',
-      'السبت',
-      'الأحد'
-    ];
-    return days[weekday - 1];
+  String _weekdayShort(int weekday) {
+    const names = ['اثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت', 'أحد'];
+    return names[weekday - 1];
+  }
+
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'صباح الخير';
+    if (hour < 17) return 'مساء الخير';
+    return 'مساء الخير';
   }
 
   String _fmt(num? v) => '${(v ?? 0).toStringAsFixed(0)} ر.س';
 
+  Future<void> _exportPdf() async {
+    await PdfHelper.buildAndPrint(
+      title: 'تطبيق ميزان - تقرير لوحة التحكم',
+      fileName: 'تقرير_لوحة_التحكم.pdf',
+      content: (font, fontBold) => [
+        pw.Row(
+          children: [
+            PdfHelper.summaryCard(font, fontBold, 'إيراد اليوم',
+                '${_todayRevenue.toStringAsFixed(0)} ر.س'),
+            pw.SizedBox(width: 10),
+            PdfHelper.summaryCard(font, fontBold, 'مستحقات المالك',
+                '${_todayOwnerNet.toStringAsFixed(0)} ر.س'),
+            pw.SizedBox(width: 10),
+            PdfHelper.summaryCard(font, fontBold, 'مستحقات السائقين',
+                '${_todayDriverNet.toStringAsFixed(0)} ر.س'),
+          ],
+        ),
+        pw.SizedBox(height: 16),
+        PdfHelper.table(
+          font: font,
+          fontBold: fontBold,
+          headers: ['البيان', 'العدد'],
+          rows: [
+            ['عدد المعدات', '$_equipmentCount'],
+            ['عدد السائقين', '$_driversCount'],
+            ['عدد المشاريع', '$_projectsCount'],
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppTheme.primary),
-      );
+      return const Scaffold(
+          body: Center(
+              child: CircularProgressIndicator(color: AppTheme.primary)));
     }
 
-    final screenWidth = MediaQuery.of(context).size.width;
-    int crossAxisCount = 2;
-    if (screenWidth > 1200) {
-      crossAxisCount = 4;
-    } else if (screenWidth > 800) {
-      crossAxisCount = 3;
-    }
-
-    return RefreshIndicator(
-      color: AppTheme.primary,
-      onRefresh: _fetchAll,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'لوحة التحكم والإحصائيات',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'متابعة تفصيلية للأداء المالي والتشغيلي',
-                      style: TextStyle(fontSize: 14, color: AppTheme.textMuted),
-                    ),
-                  ],
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.bolt_rounded,
-                          size: 18, color: AppTheme.primary),
-                      SizedBox(width: 6),
-                      Text(
-                        'مباشر',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-
-            GridView.count(
-              crossAxisCount: crossAxisCount,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 14,
-              mainAxisSpacing: 14,
-              childAspectRatio: 1.9,
-              children: [
-                _buildDistinctiveKpiCard(
-                  title: 'إيراد اليوم',
-                  value: _fmt(_todayRevenue),
-                  icon: Icons.payments_rounded,
-                  color: AppTheme.primary,
-                  bgColor: AppTheme.primaryLight,
-                ),
-                _buildDistinctiveKpiCard(
-                  title: 'مستحقات المالك',
-                  value: _fmt(_todayOwnerNet),
-                  icon: Icons.account_balance_wallet_rounded,
-                  color: Colors.teal,
-                  bgColor: Colors.teal.shade50,
-                ),
-                _buildDistinctiveKpiCard(
-                  title: 'مستحقات السائقين',
-                  value: _fmt(_todayDriverNet),
-                  icon: Icons.trending_up_rounded,
-                  color: Colors.amber.shade800,
-                  bgColor: Colors.amber.shade50,
-                ),
-                _buildDistinctiveKpiCard(
-                  title: 'المعدات النشطة',
-                  value: '$_equipmentCount',
-                  icon: Icons.local_shipping_rounded,
-                  color: Colors.indigo,
-                  bgColor: Colors.indigo.shade50,
-                ),
-                _buildDistinctiveKpiCard(
-                  title: 'إجمالي المشاريع',
-                  value: '$_projectsCount',
-                  icon: Icons.folder_special_rounded,
-                  color: Colors.deepPurple,
-                  bgColor: Colors.deepPurple.shade50,
-                ),
-                _buildDistinctiveKpiCard(
-                  title: 'إجمالي السائقين',
-                  value: '$_driversCount',
-                  icon: Icons.badge_rounded,
-                  color: Colors.blueGrey,
-                  bgColor: Colors.blueGrey.shade50,
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // الرسم البياني بعد التعديل والتنظيم
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-                border: Border.all(color: Colors.grey.shade100),
-              ),
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: const [
-                          Icon(Icons.show_chart_rounded,
-                              size: 22, color: AppTheme.primary),
-                          SizedBox(width: 8),
-                          Text(
-                            'تحليل إيرادات الأسبوع الأخير',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text(
-                          'آخر 7 أيام',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: AppTheme.textMuted,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    height: 220,
-                    child: LineChart(
-                      LineChartData(
-                        gridData: FlGridData(
-                          show: true,
-                          drawVerticalLine: false,
-                          getDrawingHorizontalLine: (value) => FlLine(
-                            color: Colors.grey.shade200,
-                            strokeWidth: 1,
-                          ),
-                        ),
-                        titlesData: FlTitlesData(
-                          rightTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
-                          topTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
-                          leftTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              reservedSize: 32,
-                              interval: 1, // إظهار كل يوم بانتظام بدون تداخل
-                              getTitlesWidget: (value, meta) {
-                                int idx = value.toInt();
-                                if (idx >= 0 && idx < _weekDaysLabels.length) {
-                                  return Padding(
-                                    padding: const EdgeInsets.only(top: 8.0),
-                                    child: Text(
-                                      _weekDaysLabels[idx],
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: AppTheme.textPrimary,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  );
-                                }
-                                return const SizedBox.shrink();
-                              },
-                            ),
-                          ),
-                        ),
-                        borderData: FlBorderData(show: false),
-                        minX: 0,
-                        maxX: 6,
-                        minY: 0,
-                        maxY: _maxChartY,
-                        lineBarsData: [
-                          LineChartBarData(
-                            spots: _weeklyChartSpots,
-                            isCurved: true,
-                            color: AppTheme.primary,
-                            barWidth: 3,
-                            isStrokeCapRound: true,
-                            dotData: const FlDotData(show: true),
-                            belowBarData: BarAreaData(
-                              show: true,
-                              color: AppTheme.primary.withValues(alpha: 0.1),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            if (_maintenanceEquipment.isNotEmpty) ...[
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.orange.shade200),
-                ),
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: const [
-                        Icon(Icons.warning_amber_rounded,
-                            color: Colors.orange, size: 22),
-                        SizedBox(width: 8),
-                        Text(
-                          'تنبيهات صيانة المعدات',
-                          style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.orange),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    ..._maintenanceEquipment.map((e) => Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.circle,
-                                  size: 8, color: Colors.orange),
-                              const SizedBox(width: 8),
-                              Text(
-                                e['name']?.toString() ?? '',
-                                style: const TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600),
-                              ),
-                            ],
-                          ),
-                        )),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-            ],
-
-            _buildSectionContainer(
-              title: 'آخر العمليات المسجلة',
-              icon: Icons.receipt_long_rounded,
-              isEmpty: _recentOperations.isEmpty,
-              emptyText: 'لا توجد عمليات مسجلة حتى الآن',
-              child: Column(
-                children: _recentOperations.map((op) {
-                  return Container(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: AppTheme.primaryLight,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(Icons.local_shipping,
-                                    size: 18, color: AppTheme.primary),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  (op['project_name']?.toString().isNotEmpty ??
-                                          false)
-                                      ? op['project_name']
-                                      : 'بدون مشروع',
-                                  style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppTheme.textPrimary),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              _fmt(op['revenue']),
-                              style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppTheme.primary),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              'المالك: ${_fmt(op['owner_net'])}',
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  color: AppTheme.textMuted,
-                                  fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            _buildSectionContainer(
-              title: 'مشاريع قيد التحصيل وتحليل نسب الدفع',
-              icon: Icons.account_balance_wallet_rounded,
-              isEmpty: _collectionProjects.isEmpty,
-              emptyText: 'لا توجد مشاريع قيد التحصيل حالياً',
-              child: Column(
-                children: _collectionProjects.map((p) {
-                  final contractValue =
-                      (p['contract_value'] as num?)?.toDouble() ?? 1;
-                  final received =
-                      (p['received_amount'] as num?)?.toDouble() ?? 0;
-                  final remaining = contractValue - received;
-                  double progress = (received / contractValue).clamp(0.0, 1.0);
-
-                  return Container(
-                    margin: const EdgeInsets.symmetric(vertical: 8),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              p['name']?.toString() ?? '',
-                              style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppTheme.textPrimary),
-                            ),
-                            Text(
-                              'متبقي: ${_fmt(remaining)}',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.amber.shade900),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: LinearProgressIndicator(
-                            value: progress,
-                            minHeight: 8,
-                            backgroundColor: Colors.grey.shade200,
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                                AppTheme.primary),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('المحصل: ${_fmt(received)}',
-                                style: const TextStyle(
-                                    fontSize: 11, color: AppTheme.textMuted)),
-                            Text('الإجمالي: ${_fmt(contractValue)}',
-                                style: const TextStyle(
-                                    fontSize: 11, color: AppTheme.textMuted)),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
+    return Scaffold(
+        appBar: AppBar(
+          title: const Text('لوحة التحكم'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.picture_as_pdf, color: AppTheme.primary),
+              tooltip: 'تصدير PDF',
+              onPressed: _exportPdf,
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildDistinctiveKpiCard({
-    required String title,
-    required String value,
-    required IconData icon,
-    required Color color,
-    required Color bgColor,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-        border: Border.all(color: Colors.grey.shade100),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: bgColor,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: color, size: 32),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppTheme.textMuted,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                    color: color,
-                    letterSpacing: 0.5,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSectionContainer({
-    required String title,
-    required IconData icon,
-    required bool isEmpty,
-    required String emptyText,
-    required Widget child,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-        border: Border.all(color: Colors.grey.shade100),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+        body: RefreshIndicator(
+          color: AppTheme.primary,
+          onRefresh: _fetchAll,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
             children: [
-              Icon(icon, size: 20, color: AppTheme.primary),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary,
+              // ==================== ترويسة ترحيبية بتدرج لوني ====================
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: AppTheme.primaryGradient,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.primary.withValues(alpha: 0.25),
+                      blurRadius: 20,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-          const Divider(height: 18, thickness: 1),
-          isEmpty
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: Center(
-                    child: Text(
-                      emptyText,
-                      style: const TextStyle(
-                        color: AppTheme.textMuted,
-                        fontSize: 14,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_greeting(),
+                              style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500)),
+                          const SizedBox(height: 4),
+                          const Text('لوحة التحكم',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 10),
+                          Text('إيراد اليوم: ${_fmt(_todayRevenue)}',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold)),
+                        ],
                       ),
                     ),
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.bolt_rounded,
+                          color: Colors.white, size: 28),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+
+              // ==================== شبكة مؤشرات الأداء ====================
+              GridView.count(
+                crossAxisCount: 2,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: 2.0,
+                children: [
+                  KpiCard(
+                    label: 'مستحقات المالك اليوم',
+                    value: _fmt(_todayOwnerNet),
+                    icon: Icons.account_balance_wallet_rounded,
+                    color: AppTheme.success,
+                    bgColor: AppTheme.successLight,
                   ),
-                )
-              : child,
-        ],
-      ),
-    );
+                  KpiCard(
+                    label: 'مستحقات السائقين اليوم',
+                    value: _fmt(_todayDriverNet),
+                    icon: Icons.payments_rounded,
+                    color: AppTheme.warning,
+                    bgColor: AppTheme.warningLight,
+                  ),
+                  KpiCard(
+                    label: 'عدد المعدات',
+                    value: '$_equipmentCount',
+                    icon: Icons.local_shipping_rounded,
+                    color: AppTheme.primary,
+                    bgColor: AppTheme.primaryLight,
+                  ),
+                  KpiCard(
+                    label: 'عدد السائقين',
+                    value: '$_driversCount',
+                    icon: Icons.badge_rounded,
+                    color: AppTheme.purple,
+                    bgColor: AppTheme.purpleLight,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+
+              // ==================== الرسم البياني الأسبوعي ====================
+              SectionCard(
+                title: 'تحليل إيرادات آخر 7 أيام',
+                icon: Icons.show_chart_rounded,
+                trailing: _projectsCount > 0
+                    ? StatusBadge(
+                        label: '$_projectsCount مشروع',
+                        color: AppTheme.primary,
+                      )
+                    : null,
+                child: SizedBox(
+                  height: 200,
+                  child: LineChart(
+                    LineChartData(
+                      gridData: FlGridData(
+                        show: true,
+                        drawVerticalLine: false,
+                        horizontalInterval: _maxChartY / 4,
+                        getDrawingHorizontalLine: (value) =>
+                            FlLine(color: AppTheme.border, strokeWidth: 1),
+                      ),
+                      titlesData: FlTitlesData(
+                        rightTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false)),
+                        topTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false)),
+                        leftTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false)),
+                        bottomTitles: AxisTitles(
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 30,
+                            interval: 1,
+                            getTitlesWidget: (value, meta) {
+                              final idx = value.toInt();
+                              if (idx < 0 || idx >= _weekDayLabels.length)
+                                return const SizedBox.shrink();
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(_weekDayLabels[idx],
+                                    style: const TextStyle(
+                                        fontSize: 10,
+                                        color: AppTheme.textMuted)),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      borderData: FlBorderData(show: false),
+                      minX: 0,
+                      maxX: 6,
+                      minY: 0,
+                      maxY: _maxChartY,
+                      lineTouchData: LineTouchData(
+                        touchTooltipData: LineTouchTooltipData(
+                          getTooltipColor: (touchedSpot) =>
+                              AppTheme.primaryDark,
+                          getTooltipItems: (spots) => spots
+                              .map((s) => LineTooltipItem(
+                                  '${s.y.toStringAsFixed(0)} ر.س',
+                                  const TextStyle(
+                                      color: Colors.white, fontSize: 11)))
+                              .toList(),
+                        ),
+                      ),
+                      lineBarsData: [
+                        LineChartBarData(
+                          spots: _weeklySpots,
+                          isCurved: true,
+                          color: AppTheme.primary,
+                          barWidth: 3,
+                          isStrokeCapRound: true,
+                          dotData: FlDotData(
+                            show: true,
+                            getDotPainter: (spot, percent, bar, index) =>
+                                FlDotCirclePainter(
+                              radius: 4,
+                              color: AppTheme.primary,
+                              strokeWidth: 2,
+                              strokeColor: Colors.white,
+                            ),
+                          ),
+                          belowBarData: BarAreaData(
+                            show: true,
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                AppTheme.primary.withValues(alpha: 0.25),
+                                AppTheme.primary.withValues(alpha: 0.0),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // ==================== آخر العمليات ====================
+              SectionCard(
+                title: 'آخر العمليات',
+                icon: Icons.receipt_long_rounded,
+                child: _recentOperations.isEmpty
+                    ? const EmptyState(
+                        icon: Icons.receipt_long_outlined,
+                        message: 'لا توجد عمليات مسجلة بعد')
+                    : Column(
+                        children: _recentOperations.map((op) {
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppTheme.background,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryLight,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(Icons.local_shipping,
+                                      size: 16, color: AppTheme.primary),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    (op['project_name']
+                                                ?.toString()
+                                                .isNotEmpty ??
+                                            false)
+                                        ? op['project_name']
+                                        : 'بدون مشروع',
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(_fmt(op['revenue']),
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primary)),
+                                    Text('المالك: ${_fmt(op['owner_net'])}',
+                                        style: const TextStyle(
+                                            fontSize: 10,
+                                            color: AppTheme.textMuted)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+              ),
+              const SizedBox(height: 16),
+
+              // ==================== مشاريع قيد التحصيل ====================
+              SectionCard(
+                title: 'مشاريع قيد التحصيل',
+                icon: Icons.account_balance_wallet_rounded,
+                child: _collectionProjects.isEmpty
+                    ? const EmptyState(
+                        icon: Icons.check_circle_outline,
+                        message: 'لا توجد مشاريع قيد التحصيل')
+                    : Column(
+                        children: _collectionProjects.map((p) {
+                          final contractValue =
+                              (p['contract_value'] as num?)?.toDouble() ?? 1;
+                          final received =
+                              (p['received_amount'] as num?)?.toDouble() ?? 0;
+                          final remaining = contractValue - received;
+                          final progress =
+                              (received / contractValue).clamp(0.0, 1.0);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(p['name']?.toString() ?? '',
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600)),
+                                    Text('متبقي ${_fmt(remaining)}',
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.warning)),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: LinearProgressIndicator(
+                                    value: progress,
+                                    minHeight: 7,
+                                    backgroundColor: AppTheme.border,
+                                    valueColor: const AlwaysStoppedAnimation(
+                                        AppTheme.primary),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+              ),
+
+              // ==================== تنبيهات الصيانة ====================
+              if (_maintenanceEquipment.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppTheme.warningLight,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                        color: AppTheme.warning.withValues(alpha: 0.3)),
+                  ),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded,
+                              color: AppTheme.warning, size: 20),
+                          SizedBox(width: 8),
+                          Text('تنبيهات الصيانة',
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.warning)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ..._maintenanceEquipment.map((e) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.local_shipping,
+                                    size: 15, color: AppTheme.warning),
+                                const SizedBox(width: 8),
+                                Text(e['name']?.toString() ?? '',
+                                    style: const TextStyle(fontSize: 13)),
+                              ],
+                            ),
+                          )),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ));
   }
 }

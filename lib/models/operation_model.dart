@@ -7,6 +7,8 @@ String sharedExpenseHandlingToDb(SharedExpenseHandling handling) {
       return 'add_to_owner';
     case SharedExpenseHandling.operatingExpense:
       return 'operating_expense';
+    case SharedExpenseHandling.fullyIgnored:
+      return 'fully_ignored';
     case SharedExpenseHandling.cancelled:
       return 'cancelled';
     case SharedExpenseHandling.notApplicable:
@@ -20,6 +22,8 @@ SharedExpenseHandling sharedExpenseHandlingFromDb(String? value) {
       return SharedExpenseHandling.addToOwner;
     case 'operating_expense':
       return SharedExpenseHandling.operatingExpense;
+    case 'fully_ignored':
+      return SharedExpenseHandling.fullyIgnored;
     case 'cancelled':
       return SharedExpenseHandling.cancelled;
     default:
@@ -49,7 +53,7 @@ class OperationModel {
   final double driverRatio;
   final SharedExpenseHandling sharedExpenseHandling;
 
-  // نتائج الحساب (تم جعلها اختيارية بقيمة افتراضية 0.0 لتجنب أخطاء الإنشاء)
+  // نتائج الحساب (تُملأ تلقائياً من AccountingService قبل الحفظ)
   final double ownerShare;
   final double driverShare;
   final double driverSharedPortion;
@@ -79,13 +83,13 @@ class OperationModel {
     required this.ownerRatio,
     required this.driverRatio,
     required this.sharedExpenseHandling,
-    this.ownerShare = 0.0,
-    this.driverShare = 0.0,
-    this.driverSharedPortion = 0.0,
-    this.ownerSharedPortion = 0.0,
-    this.totalExpenses = 0.0,
-    this.driverNet = 0.0,
-    this.ownerNet = 0.0,
+    required this.ownerShare,
+    required this.driverShare,
+    required this.driverSharedPortion,
+    required this.ownerSharedPortion,
+    required this.totalExpenses,
+    required this.driverNet,
+    required this.ownerNet,
     this.createdAt,
   });
 

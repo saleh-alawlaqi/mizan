@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
+import '../utils/pdf_helper.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 class EquipmentScreen extends StatefulWidget {
   const EquipmentScreen({super.key});
@@ -98,11 +100,14 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
     if (!equipmentTypes.contains(selectedType))
       selectedType = equipmentTypes.first;
     String? selectedDriver = existing?['current_driver'];
+    String? selectedOwner = existing?['owner_name'];
     String selectedStatus = existing?['status'] ?? 'active';
 
     List<dynamic> driversList = [];
+    List<dynamic> ownersList = [];
     try {
       driversList = await supabase.from('drivers').select();
+      ownersList = await supabase.from('owners').select();
     } catch (_) {}
 
     if (!context.mounted) return;
@@ -201,6 +206,28 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
+                      value: ownersList
+                              .any((o) => o['name'].toString() == selectedOwner)
+                          ? selectedOwner
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: 'مالك المعدة',
+                        border: OutlineInputBorder(),
+                        helperText: 'اختر من قائمة الملاك المسجّلين',
+                      ),
+                      items: [
+                        const DropdownMenuItem<String>(
+                            value: null, child: Text('بدون مالك محدد')),
+                        ...ownersList.map((owner) => DropdownMenuItem<String>(
+                              value: owner['name'].toString(),
+                              child: Text(owner['name'].toString()),
+                            )),
+                      ],
+                      onChanged: (val) =>
+                          setModalState(() => selectedOwner = val),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
                       value: selectedStatus,
                       decoration: const InputDecoration(
                         labelText: 'حالة المعدة',
@@ -243,6 +270,7 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                                         ? null
                                         : yearController.text.trim(),
                                 'current_driver': selectedDriver,
+                                'owner_name': selectedOwner,
                                 'status': selectedStatus,
                               };
                               try {
@@ -296,15 +324,62 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
     );
   }
 
+  Future<void> _exportPdf() async {
+    await PdfHelper.buildAndPrint(
+      title: 'تقرير المعدات',
+      fileName: 'تقرير_المعدات.pdf',
+      content: (font, fontBold) => [
+        PdfHelper.table(
+          font: font,
+          fontBold: fontBold,
+          headers: [
+            'الاسم',
+            'النوع',
+            'اللوحة',
+            'الموديل',
+            'السائق',
+            'المالك',
+            'الحالة'
+          ],
+          rows: equipmentList.map((item) {
+            final status = item['status'] ?? 'active';
+            final statusLabel = status == 'maintenance'
+                ? 'صيانة'
+                : (status == 'idle' ? 'متوقفة' : 'تعمل');
+            return [
+              item['name']?.toString() ?? '',
+              item['type']?.toString() ?? '',
+              item['plate_number']?.toString() ?? '-',
+              item['model']?.toString() ?? '-',
+              item['current_driver']?.toString() ?? '-',
+              item['owner_name']?.toString() ?? '-',
+              statusLabel,
+            ];
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('المعدات'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf, color: AppTheme.primary),
+            tooltip: 'تصدير PDF',
+            onPressed: isLoading ? null : _exportPdf,
+          ),
+        ],
+      ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : equipmentList.isEmpty
-              ? const Center(
-                  child: Text('لا توجد معدات مسجلة حالياً',
-                      style: TextStyle(color: AppTheme.textMuted)))
+              ? const EmptyState(
+                  icon: Icons.local_shipping_outlined,
+                  message: 'لا توجد معدات مسجلة حالياً\nاضغط + لإضافة أول معدة')
               : RefreshIndicator(
                   onRefresh: fetchEquipment,
                   child: ListView.builder(
@@ -324,41 +399,76 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                               ? 'متوقفة'
                               : 'تعمل';
 
-                      return Card(
+                      return Container(
                         margin: const EdgeInsets.only(bottom: 12),
-                        child: ListTile(
-                          leading: const Icon(Icons.local_shipping,
-                              color: AppTheme.primary),
-                          title: Text(item['name'] ?? 'بدون اسم',
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text(
-                            'رقم اللوحة: ${item['plate_number'] ?? 'غير متوفر'} | الموديل: ${item['model'] ?? 'غير متوفر'}\n'
-                            'السائق: ${item['current_driver'] ?? 'بدون سائق'}',
-                          ),
-                          isThreeLine: true,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppTheme.border),
+                          boxShadow: AppTheme.softShadow,
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(16),
                           onTap: () =>
                               _showEquipmentModal(context, existing: item),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: statusColor.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 46,
+                                  height: 46,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryLight,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(Icons.local_shipping,
+                                      color: AppTheme.primary),
                                 ),
-                                child: Text(statusLabel,
-                                    style: TextStyle(
-                                        fontSize: 11, color: statusColor)),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline,
-                                    color: Colors.red, size: 20),
-                                onPressed: () => _deleteEquipment(item),
-                              ),
-                            ],
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                                item['name'] ?? 'بدون اسم',
+                                                style: const TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 14)),
+                                          ),
+                                          StatusBadge(
+                                              label: statusLabel,
+                                              color: statusColor),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'لوحة: ${item['plate_number'] ?? '—'}  •  موديل: ${item['model'] ?? '—'}',
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textMuted),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        'السائق: ${item['current_driver'] ?? 'بدون سائق'}  •  المالك: ${item['owner_name'] ?? 'غير محدد'}',
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textMuted),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline,
+                                      color: AppTheme.destructive, size: 20),
+                                  onPressed: () => _deleteEquipment(item),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       );
