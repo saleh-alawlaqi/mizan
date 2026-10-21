@@ -298,7 +298,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                   const SizedBox(height: 16),
                   if (_partyType == _PartyType.driver)
                     DropdownButtonFormField<Map<String, dynamic>>(
-                      value: _selectedDriver,
+                      initialValue: _selectedDriver,
                       decoration: const InputDecoration(
                           labelText: 'اختر السائق',
                           border: OutlineInputBorder()),
@@ -316,7 +316,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                     )
                   else
                     DropdownButtonFormField<Map<String, dynamic>>(
-                      value: _selectedOwner,
+                      initialValue: _selectedOwner,
                       decoration: const InputDecoration(
                           labelText: 'اختر المالك',
                           border: OutlineInputBorder()),
